@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import numpy as np
 import pytest
 from pathlib import Path
@@ -9,7 +10,12 @@ from hbpc.data import TimeSeriesDataset
 from hbpc.experiments import _one_step_scores_segmented
 from hbpc.score_benchmark import backward_average_score
 from hbpc.spl_experiments import _segmentwise_transform
-from hbpc.spl_experiments import PRIMARY_PROTOCOL, analyze_dataset, fixed_alarm_count, load_unique_score_runs, selected_alarm_indices
+from hbpc.spl_experiments import PRIMARY_PROTOCOL, analyze_dataset, fixed_alarm_count, load_unique_score_runs, run_corrected_analysis, selected_alarm_indices
+
+
+def test_default_corrected_analysis_covers_the_preregistered_six_datasets():
+    default = inspect.signature(run_corrected_analysis).parameters["datasets"].default
+    assert tuple(default) == ("SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI")
 
 
 def test_primary_alarm_budget_is_half_percent_without_label_input():

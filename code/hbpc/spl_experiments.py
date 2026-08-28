@@ -25,6 +25,7 @@ class PrimaryProtocol:
 
 
 PRIMARY_PROTOCOL = PrimaryProtocol()
+CORRECTED_DATASETS = ("SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI")
 
 
 def load_run_with_training_scores(path: Path) -> tuple[ScoreRun, np.ndarray]:
@@ -145,7 +146,7 @@ def _metric_point(labels: np.ndarray, predictions: np.ndarray) -> dict[str, floa
     return {"raw_f1": float(f1(predictions, labels)), "event_recall": recall, "mttd": float(detection_delay(predictions, labels))}
 
 
-def run_corrected_analysis(score_root: Path | str, output_root: Path | str, datasets: Sequence[str] = ("SMD", "MSL", "SMAP", "PSM", "SWaT"), protocol: PrimaryProtocol = PRIMARY_PROTOCOL) -> dict[str, object]:
+def run_corrected_analysis(score_root: Path | str, output_root: Path | str, datasets: Sequence[str] = CORRECTED_DATASETS, protocol: PrimaryProtocol = PRIMARY_PROTOCOL) -> dict[str, object]:
     root, output = Path(score_root), Path(output_root)
     paths = [p for dataset in datasets for p in sorted((root / dataset / "one_step").glob("*/scores.npz"))]
     runs, audit = load_unique_score_runs(paths)
@@ -168,7 +169,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the fixed event-level SPL analysis.")
     parser.add_argument("--score-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--datasets", nargs="+", default=["SMD", "MSL", "SMAP", "PSM", "SWaT"])
+    parser.add_argument("--datasets", nargs="+", default=list(CORRECTED_DATASETS))
     args = parser.parse_args()
     run_corrected_analysis(args.score_root, args.output_dir, args.datasets)
     return 0
