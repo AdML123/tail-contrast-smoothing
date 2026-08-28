@@ -1,0 +1,174 @@
+"""Draw a compact, single-column figure of the three gated tail cases."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from hbpc.spl_experiments import load_run_with_training_scores
+from hbpc.tail_contrast import extract_event_anchors, match_peak_anchors, normalize_scores
+
+
+width_mm = 88.0
+WIDTH_IN = width_mm / 25.4
+BLUE = "#0072B2"
+ORANGE = "#E69F00"
+INK = "#222222"
+GRAY = "#777777"
+LIGHT_BLUE = "#B9D8EA"
+LIGHT_ORANGE = "#F6D89B"
+
+
+def _style() -> None:
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size": 7.0,
+        "axes.titlesize": 7.2,
+        "axes.labelsize": 7.0,
+        "xtick.labelsize": 6.2,
+        "ytick.labelsize": 6.2,
+        "legend.fontsize": 6.2,
+        "axes.linewidth": 0.7,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": False,
+        "svg.fonttype": "none",
+        "pdf.fonttype": 42,
+    })
+
+
+def _matched_profiles(path: Path, k: int = 3) -> tuple[pd.DataFrame, np.ndarray, dict[str, float]]:
+    run, training = load_run_with_training_scores(path)
+    normalized = normalize_scores(run.scores, training)
+    normalized_training = normalize_scores(training[np.isfinite(training)], training[np.isfinite(training)])
+    threshold = float(np.quantile(normalized_training, 0.99))
+    anchors = extract_event_anchors(run.scores, run.labels, k, threshold, normalized)
+    matched, balance = match_peak_anchors(anchors, caliper=0.2)
+    if matched.empty:
+        raise ValueError(f"no matched pairs in {path}")
+    anomaly = []
+    normal = []
+    for row in matched.itertuples(index=False):
+        anomaly.append(normalized[int(row.anomaly_index) : int(row.anomaly_index) + k + 1])
+        normal.append(normalized[int(row.normal_index) : int(row.normal_index) + k + 1])
+    return matched, np.asarray(anomaly), {"smd": float(balance["standardized_mean_difference"]), "contrast": float(matched["tail_difference"].mean())}
+
+
+def _draw_dataset(ax, dataset: str, profiles: tuple[pd.DataFrame, np.ndarray, dict[str, float], np.ndarray], case: str, *, show_xlabel: bool) -> None:
+    matched, anomaly, summary, _normal_profiles = profiles
+    # The caller stores the normal profiles beside the anomaly profiles.
+    normal_arr = np.asarray(profiles[3])
+    x = np.arange(anomaly.shape[1])
+    # Center each trace at its matched peak. This preserves the short-tail
+    # shape while putting systems with very different score scales on one axis.
+    normal_arr = normal_arr - normal_arr[:, [0]]
+    anomaly = anomaly - anomaly[:, [0]]
+    # The illustration compares persistence shape. Robust per-pair scaling
+    # keeps rare score spikes from flattening the case-level trajectories.
+    for values in (normal_arr, anomaly):
+        scale = np.nanmedian(np.abs(values[:, 1:]), axis=1, keepdims=True)
+        values /= np.maximum(scale, 1e-6)
+        np.nan_to_num(values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    for values, color, fill in ((normal_arr, ORANGE, LIGHT_ORANGE), (anomaly, BLUE, LIGHT_BLUE)):
+        low, med, high = np.nanpercentile(values, [10, 50, 90], axis=0)
+        ax.fill_between(x, low, high, color=fill, alpha=0.55, linewidth=0)
+        ax.plot(x, med, color=color, linewidth=1.35, marker="o", markersize=2.2,
+                markerfacecolor="white" if color == ORANGE else color,
+                markeredgewidth=0.65, linestyle="--" if color == ORANGE else "-",
+                label="normal tail" if color == ORANGE else "anomalous tail")
+    selected = int(np.argmin(np.abs(matched["tail_difference"].to_numpy() - summary["contrast"])))
+    ax.plot(x, anomaly[selected], color=BLUE, linewidth=0.75, alpha=0.7)
+    ax.plot(x, normal_arr[selected], color=ORANGE, linewidth=0.75, alpha=0.8, linestyle="--")
+    ax.axvline(0, color=GRAY, linewidth=0.55)
+    ax.axvline(3, color=GRAY, linewidth=0.55, linestyle=":")
+    ax.set_xticks(x)
+    ax.set_xticklabels(["peak", "t+1", "t+2", "t+3"], rotation=0)
+    ax.set_title(f"{dataset} | m={len(matched)} | d={summary['contrast']:.2f}", loc="left", pad=2)
+    expected = {"positive": r"expected $A>N$", "null-compatible": r"expected $A\approx N$", "reversal": r"expected $A<N$"}[case]
+    ax.text(0.98, 0.91, expected, transform=ax.transAxes, ha="right", va="top", color=INK, fontsize=6.1)
+    ax.set_ylim(-2.2, 1.0)
+    ax.set_yticks([-2, -1, 0, 1])
+    if show_xlabel:
+        ax.set_xlabel("anchor and confirmation samples")
+    else:
+        ax.set_xlabel("")
+    ax.set_ylabel("")
+
+
+def generate_case_figure(score_root: Path, output_dir: Path, input_root: Path, k: int = 3) -> list[Path]:
+    _style()
+    contrasts = pd.read_csv(input_root / "tables" / "dataset_tail_contrast.csv").set_index("dataset")
+    groups = {"positive": ["SMD", "PSM"], "null-compatible": ["HAI"], "reversal": ["MSL"]}
+    loaded: dict[str, tuple[pd.DataFrame, np.ndarray, dict[str, float], np.ndarray]] = {}
+    for dataset in sum(groups.values(), []):
+        candidates = sorted((score_root / dataset / "one_step").glob("*/scores.npz"))
+        if not candidates:
+            raise FileNotFoundError(f"no score artifact for {dataset}")
+        matched, anomaly, summary = _matched_profiles(candidates[0], k)
+        run, training = load_run_with_training_scores(candidates[0])
+        normalized = normalize_scores(run.scores, training)
+        normal_profiles = np.asarray([normalized[int(row.normal_index) : int(row.normal_index) + k + 1] for row in matched.itertuples(index=False)])
+        loaded[dataset] = (matched, anomaly, summary, normal_profiles)
+
+    fig = plt.figure(figsize=(WIDTH_IN, 3.75))
+    grid = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.0, 1.0], hspace=0.82, wspace=0.34,
+                            left=0.16, right=0.98, top=0.88, bottom=0.13)
+    axes = {}
+    axes["SMD"] = fig.add_subplot(grid[0, 0])
+    axes["PSM"] = fig.add_subplot(grid[0, 1], sharey=axes["SMD"])
+    axes["HAI"] = fig.add_subplot(grid[1, :])
+    axes["MSL"] = fig.add_subplot(grid[2, :])
+    for dataset, case in (("SMD", "positive"), ("PSM", "positive"), ("HAI", "null-compatible"), ("MSL", "reversal")):
+        _draw_dataset(axes[dataset], dataset, loaded[dataset], case, show_xlabel=dataset in {"HAI", "MSL"})
+    axes["PSM"].tick_params(labelleft=False)
+    handles, labels = axes["SMD"].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.58, 0.965), ncol=2,
+               frameon=False, handlelength=1.7, columnspacing=1.2)
+    fig.text(0.025, 0.73, "positive", rotation=90, va="center", color=BLUE, fontsize=7.0)
+    fig.text(0.025, 0.50, "null", rotation=90, va="center", color=GRAY, fontsize=7.0)
+    fig.text(0.025, 0.24, "reversal", rotation=90, va="center", color="#D55E00", fontsize=7.0)
+    fig.text(0.16, 0.03, "score relative to matched peak", ha="left", va="bottom", fontsize=6.5, color=INK)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pdf = output_dir / "fig2_case_instances.pdf"
+    svg = output_dir / "fig2_case_instances.svg"
+    png = output_dir / "fig2_case_instances.png"
+    tiff = output_dir / "fig2_case_instances.tiff"  # release raster generated from the PNG preview
+    fig.savefig(pdf)
+    fig.savefig(svg)
+    fig.savefig(png, dpi=600)
+    plt.close(fig)
+    metadata = {
+        "fig1": {"width_mm": width_mm},
+        "fig2": {
+        "width_mm": width_mm,
+        "orientation": "vertical",
+        "panels": ["positive:SMD", "positive:PSM", "null-compatible:HAI", "reversal:MSL"],
+        "selection_rule": "closest matched pair to the dataset tail-difference median; bands show all matched pairs 10th-90th percentiles; traces are centered at each matched peak for visual comparability",
+        "underpowered_rows": ["SMAP", "SWaT"],
+        },
+    }
+    (output_dir / "figure_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return [pdf, svg, png]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--score-root", type=Path, required=True)
+    parser.add_argument("--input-root", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    generate_case_figure(args.score_root, args.output_dir, args.input_root)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

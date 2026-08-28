@@ -1,0 +1,13 @@
+{
+  "title": "Peak-Matched Confirmation Windows for Time-Series Anomaly Scores",
+  "version": "1.0.0",
+  "upload_type": "software",
+  "description": "Analysis code and aggregate outputs for a peak-matched confirmation-window study. Source datasets and manuscript files are excluded.",
+  "creators": [
+    {"name": "Zhang, Yuefei", "orcid": "0009-0007-5653-393X"},
+    {"name": "Xu, Ying", "orcid": "0009-0003-2744-8462"},
+    {"name": "Tao, Xiaoying", "orcid": "0009-0009-9231-2629"}
+  ],
+  "license": "MIT",
+  "keywords": ["anomaly detection", "signal processing", "time series"]
+}

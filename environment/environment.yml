@@ -1,0 +1,19 @@
+name: paper47-spl
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip>=24
+  - numpy>=1.26,<3
+  - pandas>=2,<3
+  - scipy>=1.10,<2
+  - scikit-learn>=1.3,<2
+  - matplotlib>=3.8,<4
+  - pillow>=10,<12
+  - pyyaml>=6
+  - tqdm>=4.66
+  - pytest>=8
+  - pypdf>=4,<7
+  - pip:
+      - torch>=2.0
+      - huggingface-hub>=0.36

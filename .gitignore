@@ -1,0 +1,16 @@
+.release-check-env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+build/
+datasets/
+data/
+score-artifacts/
+*.npz
+*.npy
+*.zip
+*.key
+*.pem
+.env
+.env.*

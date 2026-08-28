@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: "Peak-Matched Confirmation Windows for Time-Series Anomaly Scores"
+message: "If you use this software, please cite the associated study."
+type: software
+version: 1.0.0
+date-released: 2026-08-29
+authors:
+  - family-names: Zhang
+    given-names: Yuefei
+    orcid: "https://orcid.org/0009-0007-5653-393X"
+  - family-names: Xu
+    given-names: Ying
+    orcid: "https://orcid.org/0009-0003-2744-8462"
+  - family-names: Tao
+    given-names: Xiaoying
+    orcid: "https://orcid.org/0009-0009-9231-2629"
+repository-code: "https://github.com/REPLACE_AFTER_APPROVAL/tail-contrast-smoothing"
+license: MIT
+keywords:
+  - anomaly detection
+  - signal processing
+  - time series
+  - likelihood-ratio test
