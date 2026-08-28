@@ -1,5 +1,7 @@
 # Peak-Matched Confirmation Windows
 
+Repository: https://github.com/AdML123/tail-contrast-smoothing
+
 This repository contains the analysis code, environment specification, tests,
 and aggregate outputs for the IEEE Signal Processing Letters study
 "Peak-Matched Confirmation Windows for Time-Series Anomaly Scores: A

@@ -14,7 +14,7 @@ authors:
   - family-names: Tao
     given-names: Xiaoying
     orcid: "https://orcid.org/0009-0009-9231-2629"
-repository-code: "https://github.com/REPLACE_AFTER_APPROVAL/tail-contrast-smoothing"
+repository-code: "https://github.com/AdML123/tail-contrast-smoothing"
 license: MIT
 keywords:
   - anomaly detection
