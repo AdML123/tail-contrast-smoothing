@@ -1,12 +1,32 @@
+import hashlib
 from pathlib import Path
 
 from pypdf import PdfReader
+from scripts.generate_release_manifest import canonical_bytes, public_paths
 
 
 ROOT = Path(__file__).resolve().parents[3]
 TABLES = ROOT / "results" / "tables"
 FIGURES = ROOT / "results" / "figures"
 DATASETS = {"SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI"}
+
+
+def test_release_text_files_have_a_cross_platform_line_ending_contract():
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "* text=auto eol=lf" in attributes
+    assert "*.pdf binary" in attributes
+
+    entries = {}
+    for line in (ROOT / "MANIFEST.sha256").read_text(encoding="utf-8").splitlines():
+        digest, relative = line.split("  ", maxsplit=1)
+        entries[relative] = digest
+
+    for relative_path in public_paths(ROOT):
+        path = ROOT / relative_path
+        relative = relative_path.as_posix()
+        data = canonical_bytes(path)
+        assert relative in entries, f"manifest entry missing for {relative}"
+        assert hashlib.sha256(data).hexdigest() == entries[relative]
 
 
 def test_aggregate_tables_have_the_fixed_six_dataset_case_set():
