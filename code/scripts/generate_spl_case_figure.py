@@ -305,6 +305,11 @@ def generate_case_figure(
     png = output_dir / "fig2_case_instances.png"
     tiff = output_dir / "fig2_case_instances.tiff"
     fig.savefig(svg, format="svg")
+    svg.write_text(
+        "\n".join(line.rstrip() for line in svg.read_text(encoding="utf-8").splitlines())
+        + "\n",
+        encoding="utf-8",
+    )
     fig.savefig(pdf, format="pdf")
     fig.savefig(png, format="png", dpi=600)
     fig.savefig(tiff, format="tiff", dpi=600)
