@@ -28,3 +28,15 @@ def test_case_figure_has_vertical_three_case_structure():
     assert fig2["orientation"] == "vertical"
     assert fig2["panels"] == ["positive:SMD", "positive:PSM", "null-compatible:HAI", "reversal:MSL"]
     assert fig2["underpowered_rows"] == ["SMAP", "SWaT"]
+
+
+def test_case_figure_uses_global_labels_and_shared_pair_scaling():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "generate_spl_case_figure.py"
+    ).read_text(encoding="utf-8")
+    assert source.count("fig.supxlabel(") == 1
+    assert "ax.set_xlabel(" not in source
+    assert "pair_scale" in source
+    assert "for values in (normal_arr, anomaly)" not in source

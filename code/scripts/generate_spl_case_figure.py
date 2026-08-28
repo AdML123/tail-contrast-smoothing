@@ -63,44 +63,45 @@ def _matched_profiles(path: Path, k: int = 3) -> tuple[pd.DataFrame, np.ndarray,
     return matched, np.asarray(anomaly), {"smd": float(balance["standardized_mean_difference"]), "contrast": float(matched["tail_difference"].mean())}
 
 
-def _draw_dataset(ax, dataset: str, profiles: tuple[pd.DataFrame, np.ndarray, dict[str, float], np.ndarray], case: str, *, show_xlabel: bool) -> None:
+def _draw_dataset(ax, dataset: str, profiles: tuple[pd.DataFrame, np.ndarray, dict[str, float], np.ndarray], case: str) -> None:
     matched, anomaly, summary, _normal_profiles = profiles
     # The caller stores the normal profiles beside the anomaly profiles.
     normal_arr = np.asarray(profiles[3])
     x = np.arange(anomaly.shape[1])
-    # Center each trace at its matched peak. This preserves the short-tail
-    # shape while putting systems with very different score scales on one axis.
-    normal_arr = normal_arr - normal_arr[:, [0]]
-    anomaly = anomaly - anomaly[:, [0]]
-    # The illustration compares persistence shape. Robust per-pair scaling
-    # keeps rare score spikes from flattening the case-level trajectories.
-    for values in (normal_arr, anomaly):
-        scale = np.nanmedian(np.abs(values[:, 1:]), axis=1, keepdims=True)
-        values /= np.maximum(scale, 1e-6)
-        np.nan_to_num(values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    # Use one center per matched pair and one scale per dataset. Applying the
+    # same affine transform to both classes preserves the tail-difference sign.
+    pair_center = 0.5 * (normal_arr[:, [0]] + anomaly[:, [0]])
+    normal_arr = normal_arr - pair_center
+    anomaly = anomaly - pair_center
+    pooled_tail = np.concatenate((normal_arr[:, 1:], anomaly[:, 1:]), axis=1)
+    pair_scale = float(np.nanmedian(np.abs(pooled_tail)))
+    normal_arr /= max(pair_scale, 1e-6)
+    anomaly /= max(pair_scale, 1e-6)
+    np.nan_to_num(normal_arr, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    np.nan_to_num(anomaly, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    selected = int(np.argmin(np.abs(matched["tail_difference"].to_numpy() - summary["contrast"])))
     for values, color, fill in ((normal_arr, ORANGE, LIGHT_ORANGE), (anomaly, BLUE, LIGHT_BLUE)):
-        low, med, high = np.nanpercentile(values, [10, 50, 90], axis=0)
+        low, med, high = np.nanpercentile(values, [25, 50, 75], axis=0)
         ax.fill_between(x, low, high, color=fill, alpha=0.55, linewidth=0)
-        ax.plot(x, med, color=color, linewidth=1.35, marker="o", markersize=2.2,
+        ax.plot(x, med, color=color, linewidth=0.7, alpha=0.65,
+                linestyle="--" if color == ORANGE else "-")
+        ax.plot(x, values[selected], color=color, linewidth=1.35, marker="o", markersize=2.2,
                 markerfacecolor="white" if color == ORANGE else color,
                 markeredgewidth=0.65, linestyle="--" if color == ORANGE else "-",
                 label="normal tail" if color == ORANGE else "anomalous tail")
-    selected = int(np.argmin(np.abs(matched["tail_difference"].to_numpy() - summary["contrast"])))
-    ax.plot(x, anomaly[selected], color=BLUE, linewidth=0.75, alpha=0.7)
-    ax.plot(x, normal_arr[selected], color=ORANGE, linewidth=0.75, alpha=0.8, linestyle="--")
     ax.axvline(0, color=GRAY, linewidth=0.55)
     ax.axvline(3, color=GRAY, linewidth=0.55, linestyle=":")
     ax.set_xticks(x)
     ax.set_xticklabels(["peak", "t+1", "t+2", "t+3"], rotation=0)
-    ax.set_title(f"{dataset} | m={len(matched)} | d={summary['contrast']:.2f}", loc="left", pad=2)
-    expected = {"positive": r"expected $A>N$", "null-compatible": r"expected $A\approx N$", "reversal": r"expected $A<N$"}[case]
+    ax.set_title(f"{dataset} | {len(matched)} matched pairs", loc="left", pad=2)
+    expected = {
+        "positive": "predicted: anomalous higher",
+        "null-compatible": "predicted: no resolved direction",
+        "reversal": "predicted: normal higher",
+    }[case]
     ax.text(0.98, 0.91, expected, transform=ax.transAxes, ha="right", va="top", color=INK, fontsize=6.1)
     ax.set_ylim(-2.2, 1.0)
     ax.set_yticks([-2, -1, 0, 1])
-    if show_xlabel:
-        ax.set_xlabel("anchor and confirmation samples")
-    else:
-        ax.set_xlabel("")
     ax.set_ylabel("")
 
 
@@ -120,15 +121,15 @@ def generate_case_figure(score_root: Path, output_dir: Path, input_root: Path, k
         loaded[dataset] = (matched, anomaly, summary, normal_profiles)
 
     fig = plt.figure(figsize=(WIDTH_IN, 3.75))
-    grid = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.0, 1.0], hspace=0.82, wspace=0.34,
-                            left=0.16, right=0.98, top=0.88, bottom=0.13)
+    grid = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.0, 1.0], hspace=0.70, wspace=0.34,
+                            left=0.17, right=0.98, top=0.88, bottom=0.12)
     axes = {}
     axes["SMD"] = fig.add_subplot(grid[0, 0])
     axes["PSM"] = fig.add_subplot(grid[0, 1], sharey=axes["SMD"])
     axes["HAI"] = fig.add_subplot(grid[1, :])
     axes["MSL"] = fig.add_subplot(grid[2, :])
     for dataset, case in (("SMD", "positive"), ("PSM", "positive"), ("HAI", "null-compatible"), ("MSL", "reversal")):
-        _draw_dataset(axes[dataset], dataset, loaded[dataset], case, show_xlabel=dataset in {"HAI", "MSL"})
+        _draw_dataset(axes[dataset], dataset, loaded[dataset], case)
     axes["PSM"].tick_params(labelleft=False)
     handles, labels = axes["SMD"].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.58, 0.965), ncol=2,
@@ -136,7 +137,8 @@ def generate_case_figure(score_root: Path, output_dir: Path, input_root: Path, k
     fig.text(0.025, 0.73, "positive", rotation=90, va="center", color=BLUE, fontsize=7.0)
     fig.text(0.025, 0.50, "null", rotation=90, va="center", color=GRAY, fontsize=7.0)
     fig.text(0.025, 0.24, "reversal", rotation=90, va="center", color="#D55E00", fontsize=7.0)
-    fig.text(0.16, 0.03, "score relative to matched peak", ha="left", va="bottom", fontsize=6.5, color=INK)
+    fig.text(0.085, 0.49, "relative score", rotation=90, ha="center", va="center", fontsize=6.5, color=INK)
+    fig.supxlabel("anchor and confirmation samples", x=0.58, y=0.015, fontsize=6.5, color=INK)
     output_dir.mkdir(parents=True, exist_ok=True)
     pdf = output_dir / "fig2_case_instances.pdf"
     svg = output_dir / "fig2_case_instances.svg"
@@ -152,7 +154,7 @@ def generate_case_figure(score_root: Path, output_dir: Path, input_root: Path, k
         "width_mm": width_mm,
         "orientation": "vertical",
         "panels": ["positive:SMD", "positive:PSM", "null-compatible:HAI", "reversal:MSL"],
-        "selection_rule": "closest matched pair to the dataset tail-difference median; bands show all matched pairs 10th-90th percentiles; traces are centered at each matched peak for visual comparability",
+        "selection_rule": "closest matched pair to the dataset mean tail difference; bands show matched-pair interquartile ranges; both classes use a shared pair center and dataset scale",
         "underpowered_rows": ["SMAP", "SWaT"],
         },
     }
