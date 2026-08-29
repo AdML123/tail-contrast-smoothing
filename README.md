@@ -2,6 +2,8 @@
 
 Repository: https://github.com/AdML123/tail-contrast-smoothing
 
+Archived release: https://doi.org/10.5281/zenodo.22152182
+
 This repository contains the analysis code, environment specification, tests,
 and aggregate outputs for the IEEE Signal Processing Letters study
 "Peak-Matched Confirmation Windows for Time-Series Anomaly Scores: A
