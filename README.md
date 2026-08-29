@@ -21,7 +21,10 @@ are in `REPRODUCING.md`.
 
 The primary protocol fixes a three-sample causal confirmation window, peak
 matching caliper 0.2, alarm fraction 0.005, and a 20-pair primary evidence
-gate. Rows below that gate remain explicitly exploratory.
+gate. Rows below that gate remain explicitly exploratory. The tracked
+`alarm_fraction_sensitivity.csv` is a secondary all-dataset check at alarm
+fractions 0.005, 0.01, and 0.05. It does not replace the primary operating
+point or select a best budget.
 
 ## License
 

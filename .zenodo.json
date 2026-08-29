@@ -1,6 +1,6 @@
 {
   "title": "Peak-Matched Confirmation Windows for Time-Series Anomaly Scores",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "upload_type": "software",
   "description": "Analysis code and aggregate outputs for a peak-matched confirmation-window study. Source datasets and manuscript files are excluded.",
   "creators": [

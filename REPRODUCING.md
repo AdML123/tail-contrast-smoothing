@@ -8,7 +8,11 @@ relative paths only.
 ```powershell
 conda env create --file .\environment\environment.yml
 conda run -n paper47-spl python -m pip install -e ".\code[test]"
-conda run -n paper47-spl python -m pytest .\code\tests -q
+conda run -n paper47-spl python -m pytest .\code\tests\release_smoke -q
+conda run -n paper47-spl python -m pytest `
+  .\code\tests\test_spl_experiments.py `
+  .\code\tests\test_spl_result_verifier.py `
+  .\code\tests\test_reproduce_spl.py -q
 ```
 
 The analysis is CPU-compatible. A GPU is not required.
@@ -35,6 +39,8 @@ conda run -n paper47-spl python .\code\scripts\reproduce_spl.py `
 ```
 
 The dry run prints the stages without reading data. A full run writes only to
-the selected output directory. Aggregate tables can be compared with the
-tracked CSV files using a script or a spreadsheet; no values are copied into
-the manuscript by hand.
+the selected output directory, including the fixed-protocol tables and the
+all-six-dataset alarm-fraction sensitivity grid. The primary alarm fraction is
+0.005; fractions 0.01 and 0.05 are secondary checks and are never selected by
+achieved F1. Aggregate tables can be compared with the tracked CSV files using
+a script or a spreadsheet; no values are copied into the manuscript by hand.

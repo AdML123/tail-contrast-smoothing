@@ -26,6 +26,7 @@ class PrimaryProtocol:
 
 PRIMARY_PROTOCOL = PrimaryProtocol()
 CORRECTED_DATASETS = ("SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI")
+ALARM_FRACTION_SENSITIVITY = (0.005, 0.01, 0.05)
 
 
 def load_run_with_training_scores(path: Path) -> tuple[ScoreRun, np.ndarray]:
@@ -68,6 +69,20 @@ def selected_alarm_indices(scores: np.ndarray, fraction: float) -> np.ndarray:
     return np.flatnonzero(top_n_predictions(scores, top_n=fixed_alarm_count(len(scores), fraction)))
 
 
+def pointwise_f1_ceiling(labels: np.ndarray, alarm_fraction: float) -> dict[str, float | int]:
+    binary = np.asarray(labels).astype(bool).reshape(-1)
+    alarm_count = fixed_alarm_count(binary.size, alarm_fraction)
+    positives = int(binary.sum())
+    true_positives = min(alarm_count, positives)
+    denominator = alarm_count + positives
+    ceiling = 2.0 * true_positives / denominator if denominator else 0.0
+    return {
+        "alarm_count": alarm_count,
+        "anomaly_prevalence": float(positives / binary.size),
+        "pointwise_f1_ceiling": float(ceiling),
+    }
+
+
 def classify_regime(ci_low: float, ci_high: float, null: float = 0.1) -> str:
     if ci_low > null:
         return "positive"
@@ -98,6 +113,29 @@ def _segmentwise_transform(
     return np.concatenate(pieces)
 
 
+def _method_scores(run: ScoreRun, protocol: PrimaryProtocol) -> dict[str, tuple[np.ndarray, int]]:
+    return {
+        "raw_realtime": (run.scores, 0),
+        "raw_delayed": (run.scores, protocol.k),
+        "confirmation_mean": (
+            _segmentwise_transform(
+                run.scores,
+                run.segment_lengths,
+                lambda values: confirmation_window_score(values, protocol.k),
+            ),
+            0,
+        ),
+        "ewma": (
+            _segmentwise_transform(
+                run.scores,
+                run.segment_lengths,
+                lambda values: ewma_score(values, protocol.ewma_alpha),
+            ),
+            0,
+        ),
+    }
+
+
 def analyze_dataset(run: ScoreRun, training_normal_scores: np.ndarray, protocol: PrimaryProtocol = PRIMARY_PROTOCOL) -> pd.DataFrame:
     normalized = normalize_scores(run.scores, training_normal_scores)
     finite_training = np.asarray(training_normal_scores, dtype=float)
@@ -111,12 +149,7 @@ def analyze_dataset(run: ScoreRun, training_normal_scores: np.ndarray, protocol:
     contrast = paired_tail_contrast(matched)
     interval = paired_bootstrap_ci(matched["tail_difference"].to_numpy(), protocol.n_boot, protocol.seed)
     alarm_count = fixed_alarm_count(run.scores.size, protocol.alarm_fraction)
-    methods = {
-        "raw_realtime": (run.scores, 0),
-        "raw_delayed": (run.scores, protocol.k),
-        "confirmation_mean": (_segmentwise_transform(run.scores, run.segment_lengths, lambda values: confirmation_window_score(values, protocol.k)), 0),
-        "ewma": (_segmentwise_transform(run.scores, run.segment_lengths, lambda values: ewma_score(values, protocol.ewma_alpha)), 0),
-    }
+    methods = _method_scores(run, protocol)
     rows: list[dict[str, object]] = []
     for method, (score, delay) in methods.items():
         predictions = top_n_predictions(score, alarm_count, delay=delay, length=run.labels.size)
@@ -135,6 +168,56 @@ def analyze_dataset(run: ScoreRun, training_normal_scores: np.ndarray, protocol:
             row[f"{name}_ci_low"] = uncertainty["metrics"][name]["ci_low"]
             row[f"{name}_ci_high"] = uncertainty["metrics"][name]["ci_high"]
         rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def analyze_alarm_fraction_sensitivity(
+    run: ScoreRun,
+    training_normal_scores: np.ndarray,
+    protocol: PrimaryProtocol = PRIMARY_PROTOCOL,
+    alarm_fractions: Sequence[float] = ALARM_FRACTION_SENSITIVITY,
+) -> pd.DataFrame:
+    fractions = tuple(float(value) for value in alarm_fractions)
+    if fractions != tuple(sorted(set(fractions))):
+        raise ValueError("alarm fractions must be unique and sorted")
+    if protocol.alarm_fraction not in fractions:
+        raise ValueError("the frozen primary alarm fraction must remain in the sensitivity grid")
+
+    primary = analyze_dataset(run, training_normal_scores, protocol)
+    evidence_columns = (
+        "matched_pairs",
+        "peak_smd",
+        "tail_contrast",
+        "contrast_ci_low",
+        "contrast_ci_high",
+        "regime",
+        "evidence_status",
+    )
+    evidence = {name: primary.iloc[0][name] for name in evidence_columns}
+    methods = _method_scores(run, protocol)
+    rows: list[dict[str, object]] = []
+    for alarm_fraction in fractions:
+        scale = pointwise_f1_ceiling(run.labels, alarm_fraction)
+        for method, (scores, delay) in methods.items():
+            predictions = top_n_predictions(
+                scores,
+                int(scale["alarm_count"]),
+                delay=delay,
+                length=run.labels.size,
+            )
+            rows.append(
+                {
+                    "dataset": run.dataset,
+                    "predictor": run.predictor,
+                    "seed": run.seed,
+                    "method": method,
+                    "alarm_fraction": alarm_fraction,
+                    "analysis_role": "primary" if np.isclose(alarm_fraction, protocol.alarm_fraction) else "post_review_sensitivity",
+                    **scale,
+                    **evidence,
+                    **_metric_point(run.labels, predictions),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -163,6 +246,40 @@ def run_corrected_analysis(score_root: Path | str, output_root: Path | str, data
     return {"audit": audit, "rows": frame}
 
 
+def run_alarm_fraction_sensitivity(
+    score_root: Path | str,
+    output_root: Path | str,
+    datasets: Sequence[str] = CORRECTED_DATASETS,
+    protocol: PrimaryProtocol = PRIMARY_PROTOCOL,
+    alarm_fractions: Sequence[float] = ALARM_FRACTION_SENSITIVITY,
+) -> dict[str, object]:
+    root, output = Path(score_root), Path(output_root)
+    paths = [
+        path
+        for dataset in datasets
+        for path in sorted((root / dataset / "one_step").glob("*/scores.npz"))
+    ]
+    runs, audit = load_unique_score_runs(paths)
+    (output / "audits").mkdir(parents=True, exist_ok=True)
+    (output / "tables").mkdir(parents=True, exist_ok=True)
+    (output / "audits" / "artifact_deduplication.json").write_text(
+        __import__("json").dumps(audit, indent=2),
+        encoding="utf-8",
+    )
+    analyses = [
+        analyze_alarm_fraction_sensitivity(
+            run,
+            training,
+            protocol=protocol,
+            alarm_fractions=alarm_fractions,
+        )
+        for run, training in runs
+    ]
+    frame = pd.concat(analyses, ignore_index=True) if analyses else pd.DataFrame()
+    frame.to_csv(output / "tables" / "alarm_fraction_sensitivity.csv", index=False)
+    return {"audit": audit, "rows": frame}
+
+
 def main() -> int:
     import argparse
 
@@ -170,8 +287,12 @@ def main() -> int:
     parser.add_argument("--score-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--datasets", nargs="+", default=list(CORRECTED_DATASETS))
+    parser.add_argument("--mode", choices=("corrected", "alarm-sensitivity"), default="corrected")
     args = parser.parse_args()
-    run_corrected_analysis(args.score_root, args.output_dir, args.datasets)
+    if args.mode == "alarm-sensitivity":
+        run_alarm_fraction_sensitivity(args.score_root, args.output_dir, args.datasets)
+    else:
+        run_corrected_analysis(args.score_root, args.output_dir, args.datasets)
     return 0
 
 

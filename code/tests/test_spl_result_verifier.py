@@ -4,7 +4,7 @@ import json
 
 import pandas as pd
 
-from hbpc.spl_result_verifier import verify_spl_results
+from hbpc.spl_result_verifier import verify_alarm_fraction_sensitivity, verify_spl_results
 
 
 def write_minimal_outputs(root, methods=None, selected_by="frozen_protocol"):
@@ -50,3 +50,45 @@ def test_verifier_rejects_underpowered_primary_regime_label(tmp_path):
     frame.to_csv(tmp_path / "tables" / "dataset_tail_contrast.csv", index=False)
     report = verify_spl_results(tmp_path)
     assert "underpowered dataset has primary regime label" in report["errors"]
+
+
+def write_valid_alarm_fraction_sensitivity(root):
+    tables = root / "tables"
+    tables.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for dataset in ("SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI"):
+        for fraction in (0.005, 0.01, 0.05):
+            for method in ("raw_realtime", "raw_delayed", "confirmation_mean", "ewma"):
+                rows.append(
+                    {
+                        "dataset": dataset,
+                        "method": method,
+                        "alarm_fraction": fraction,
+                        "analysis_role": "primary" if fraction == 0.005 else "post_review_sensitivity",
+                        "alarm_count": 10,
+                        "anomaly_prevalence": 0.1,
+                        "pointwise_f1_ceiling": 0.2,
+                        "raw_f1": 0.1,
+                        "event_recall": 0.2,
+                        "mttd": 1.0,
+                    }
+                )
+    pd.DataFrame(rows).to_csv(tables / "alarm_fraction_sensitivity.csv", index=False)
+
+
+def test_alarm_fraction_verifier_requires_complete_fixed_grid(tmp_path):
+    write_valid_alarm_fraction_sensitivity(tmp_path)
+    report = verify_alarm_fraction_sensitivity(tmp_path)
+    assert report["passed"]
+    assert report["checked_rows"] == 72
+
+
+def test_alarm_fraction_verifier_rejects_missing_or_selected_rows(tmp_path):
+    write_valid_alarm_fraction_sensitivity(tmp_path)
+    path = tmp_path / "tables" / "alarm_fraction_sensitivity.csv"
+    frame = pd.read_csv(path).iloc[:-1].assign(best_budget=0.05)
+    frame.to_csv(path, index=False)
+    report = verify_alarm_fraction_sensitivity(tmp_path)
+    assert not report["passed"]
+    assert "incomplete alarm-fraction grid" in report["errors"]
+    assert "result-selected sensitivity output" in report["errors"]

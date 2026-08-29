@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -10,6 +11,7 @@ REQUIRED_METHODS = {"raw_realtime", "raw_delayed", "confirmation_mean", "ewma"}
 FORBIDDEN_METHODS = {"forward_avg", "backward_avg"}
 REQUIRED_DATASETS = {"SMD", "MSL", "SMAP", "PSM", "SWaT", "HAI"}
 MINIMUM_PRIMARY_PAIRS = 20
+REQUIRED_ALARM_FRACTIONS = {0.005, 0.01, 0.05}
 
 
 def verify_spl_results(root: Path | str) -> dict[str, object]:
@@ -70,3 +72,71 @@ def verify_spl_results(root: Path | str) -> dict[str, object]:
             if column in contrast and not pd.to_numeric(contrast[column], errors="coerce").notna().all():
                 errors.append(f"non-finite {column}")
     return {"passed": not errors, "errors": errors, "checked_methods": sorted(methods), "checked_datasets": sorted(datasets)}
+
+
+def verify_alarm_fraction_sensitivity(root: Path | str) -> dict[str, object]:
+    root = Path(root)
+    path = root / "tables" / "alarm_fraction_sensitivity.csv"
+    errors: list[str] = []
+    if not path.exists():
+        return {"passed": False, "errors": ["missing alarm-fraction sensitivity table"]}
+
+    frame = pd.read_csv(path)
+    selection_columns = {"best_budget", "minimum_f1", "winner", "selected_budget"}
+    if selection_columns & set(frame.columns):
+        errors.append("result-selected sensitivity output")
+    required_columns = {
+        "dataset",
+        "method",
+        "alarm_fraction",
+        "analysis_role",
+        "alarm_count",
+        "anomaly_prevalence",
+        "pointwise_f1_ceiling",
+        "raw_f1",
+        "event_recall",
+        "mttd",
+    }
+    if not required_columns <= set(frame.columns):
+        errors.append("missing alarm-fraction sensitivity field")
+        return {"passed": False, "errors": errors, "checked_rows": len(frame)}
+
+    datasets = set(frame["dataset"].astype(str))
+    methods = set(frame["method"].astype(str))
+    fractions = set(pd.to_numeric(frame["alarm_fraction"], errors="coerce"))
+    complete = (
+        len(frame) == len(REQUIRED_DATASETS) * len(REQUIRED_METHODS) * len(REQUIRED_ALARM_FRACTIONS)
+        and datasets == REQUIRED_DATASETS
+        and methods == REQUIRED_METHODS
+        and fractions == REQUIRED_ALARM_FRACTIONS
+        and not frame.duplicated(["dataset", "method", "alarm_fraction"]).any()
+    )
+    if not complete:
+        errors.append("incomplete alarm-fraction grid")
+
+    for column in (
+        "alarm_fraction",
+        "alarm_count",
+        "anomaly_prevalence",
+        "pointwise_f1_ceiling",
+        "raw_f1",
+        "event_recall",
+        "mttd",
+    ):
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            errors.append(f"non-finite sensitivity {column}")
+
+    primary = np.isclose(pd.to_numeric(frame["alarm_fraction"]), 0.005)
+    roles = frame["analysis_role"].astype(str).to_numpy()
+    if (roles[primary] != "primary").any() or (roles[~primary] != "post_review_sensitivity").any():
+        errors.append("inconsistent sensitivity role")
+
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "checked_rows": len(frame),
+        "checked_datasets": sorted(datasets),
+        "checked_methods": sorted(methods),
+        "checked_alarm_fractions": sorted(fractions),
+    }

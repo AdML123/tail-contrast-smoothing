@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import inspect
 import numpy as np
+import pandas as pd
 import pytest
+from dataclasses import replace
 from pathlib import Path
 
 from hbpc.score_benchmark import ScoreRun
@@ -10,7 +12,7 @@ from hbpc.data import TimeSeriesDataset
 from hbpc.experiments import _one_step_scores_segmented
 from hbpc.score_benchmark import backward_average_score
 from hbpc.spl_experiments import _segmentwise_transform
-from hbpc.spl_experiments import PRIMARY_PROTOCOL, analyze_dataset, fixed_alarm_count, load_unique_score_runs, run_corrected_analysis, selected_alarm_indices
+from hbpc.spl_experiments import ALARM_FRACTION_SENSITIVITY, PRIMARY_PROTOCOL, analyze_alarm_fraction_sensitivity, analyze_dataset, fixed_alarm_count, load_unique_score_runs, pointwise_f1_ceiling, run_alarm_fraction_sensitivity, run_corrected_analysis, selected_alarm_indices
 
 
 def test_default_corrected_analysis_covers_the_preregistered_six_datasets():
@@ -28,6 +30,79 @@ def test_primary_protocol_is_not_a_test_selected_grid():
     assert PRIMARY_PROTOCOL.alarm_fraction == 0.005
     assert PRIMARY_PROTOCOL.ewma_alpha == 0.3
     assert PRIMARY_PROTOCOL.peak_caliper == 0.2
+
+
+def test_post_review_alarm_fraction_grid_is_fixed_without_a_winner_rule():
+    assert ALARM_FRACTION_SENSITIVITY == (0.005, 0.01, 0.05)
+    parameters = inspect.signature(run_alarm_fraction_sensitivity).parameters
+    assert "best_budget" not in parameters
+    assert "minimum_f1" not in parameters
+
+
+def test_pointwise_f1_ceiling_uses_prevalence_and_fixed_alarm_count():
+    labels = np.array([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
+    ceiling = pointwise_f1_ceiling(labels, alarm_fraction=0.1)
+    assert ceiling["alarm_count"] == 1
+    assert ceiling["anomaly_prevalence"] == pytest.approx(0.2)
+    assert ceiling["pointwise_f1_ceiling"] == pytest.approx(2.0 / 3.0)
+
+
+def test_alarm_fraction_sensitivity_keeps_every_method_fraction_row():
+    scores = np.zeros(50, dtype=float)
+    scores[[2, 10, 20, 28, 38]] = [5.1, 5.11, 5.2, 5.19, 5.0]
+    scores[[11, 12, 29, 30]] = [3.0, 2.0, 3.2, 2.1]
+    labels = np.zeros(50, dtype=bool)
+    labels[10:13] = True
+    labels[28:31] = True
+    run = ScoreRun(dataset="toy", predictor="p", seed=0, scores=scores, labels=labels)
+    protocol = replace(PRIMARY_PROTOCOL, n_boot=20)
+    result = analyze_alarm_fraction_sensitivity(
+        run,
+        training_normal_scores=np.array([0.0, 0.5, 1.0, 2.0, 3.0, 4.8]),
+        protocol=protocol,
+    )
+    assert len(result) == 4 * len(ALARM_FRACTION_SENSITIVITY)
+    assert set(result["method"]) == {"raw_realtime", "raw_delayed", "confirmation_mean", "ewma"}
+    assert tuple(sorted(result["alarm_fraction"].unique())) == ALARM_FRACTION_SENSITIVITY
+    assert {"alarm_count", "anomaly_prevalence", "pointwise_f1_ceiling", "raw_f1", "event_recall", "mttd"} <= set(result.columns)
+    assert "best_budget" not in result.columns
+    expected = analyze_dataset(
+        run,
+        training_normal_scores=np.array([0.0, 0.5, 1.0, 2.0, 3.0, 4.8]),
+        protocol=protocol,
+    ).sort_values("method")
+    primary = result[result["analysis_role"] == "primary"].sort_values("method")
+    assert expected["method"].tolist() == primary["method"].tolist()
+    for metric in ("raw_f1", "event_recall", "mttd"):
+        assert np.allclose(expected[metric], primary[metric], equal_nan=True)
+
+
+def test_alarm_fraction_sensitivity_runner_writes_long_form_csv(tmp_path: Path):
+    score_root = tmp_path / "scores"
+    artifact_dir = score_root / "toy" / "one_step" / "0"
+    artifact_dir.mkdir(parents=True)
+    scores = np.zeros(50, dtype=float)
+    scores[[2, 10, 20, 28, 38]] = [5.1, 5.11, 5.2, 5.19, 5.0]
+    scores[[11, 12, 29, 30]] = [3.0, 2.0, 3.2, 2.1]
+    labels = np.zeros(50, dtype=bool)
+    labels[10:13] = True
+    labels[28:31] = True
+    np.savez(
+        artifact_dir / "scores.npz",
+        scores=scores,
+        labels=labels,
+        training_normal_scores=np.array([0.0, 0.5, 1.0, 2.0, 3.0, 4.8]),
+    )
+    output = tmp_path / "out"
+    report = run_alarm_fraction_sensitivity(
+        score_root,
+        output,
+        datasets=("toy",),
+        protocol=replace(PRIMARY_PROTOCOL, n_boot=20),
+    )
+    written = pd.read_csv(output / "tables" / "alarm_fraction_sensitivity.csv")
+    assert len(written) == 12
+    assert len(report["rows"]) == 12
 
 
 def test_dataset_analysis_reports_balance_contrast_and_delay_metrics():
